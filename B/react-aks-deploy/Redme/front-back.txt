@@ -1,0 +1,109 @@
+Perfect. Let’s update the React frontend so it talks to the deployed backend via the AKS LoadBalancer IP.
+
+
+
+✅ Goal
+Replace localhost with http://<backend-external-ip>:5000 in the frontend code and redeploy the container.
+
+
+
+🔍 Step 1: Identify Backend API URL
+
+
+From your output:
+
+pytodo-backend-svc   LoadBalancer   ...   EXTERNAL-IP: 48.216.134.130   PORT: 5000
+
+
+
+
+
+So the backend API base URL is:
+
+http://48.216.134.130:5000
+
+
+
+
+
+
+🛠 Step 2: Modify React Frontend to Use New API
+
+
+1. Open your ReactTodoUIMonolith code locally
+Update the API base URL in your frontend code. Usually it's in:
+
+src/api.js
+
+src/services/todoService.js
+
+or wherever fetch()/axios calls are defined.
+
+
+
+
+Replace:
+const API_BASE = 'http://localhost:5000';
+
+
+With
+const API_BASE = 'http://48.216.134.130:5000';
+
+
+
+
+Or you can define it using environment variables.
+
+2. Optional (better): Use REACT_APP_API_URL
+In your Dockerfile, add this near the top:
+
+
+
+ARG REACT_APP_API_URL
+ENV REACT_APP_API_URL=$REACT_APP_API_URL
+
+
+
+
+
+Then build with:
+
+docker build -t <acr-login-server>/reacttodo:v2 --build-arg REACT_APP_API_URL=http://48.216.134.130:5000 .
+
+
+
+
+🏗 Step 3: Build and Push New Image
+docker build -t <acr-login-server>/reacttodo:v2 .
+docker push <acr-login-server>/reacttodo:v2
+
+
+📦 Step 4: Update the Deployment in AKS
+Modify your Kubernetes react-deployment.yaml to use the new image:
+
+containers:
+  - name: reacttodo
+    image: adityaacr12345.azurecr.io/reacttodo:v2
+
+
+Then re-apply it:
+
+kubectl apply -f react-deployment.yaml
+
+
+You can verify rollout status:
+kubectl rollout status deployment/reacttodo-deployment
+
+
+
+
+🔎 Step 5: Verify in Browser
+
+Visit:
+http://134.33.243.185
+
+
+
+The React frontend should now be able to fetch tasks from:
+
+http://48.216.134.130:5000/tasks

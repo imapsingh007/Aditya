@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reacttodo-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reacttodo
+  template:
+    metadata:
+      labels:
+        app: reacttodo
+    spec:
+      containers:
+      - name: reacttodo
+        image: reactacr123456.azurecr.io/reacttodo:v3
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reacttodo-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: reacttodo
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80

@@ -1,0 +1,336 @@
+Let's now deploy the PyTodoBackendMonolith app on AKS,
+ connect it to a new Azure SQL Database, and store the container image in ACR, continuing from your existing frontend infrastructure.
+
+
+
+
+ ✅ What You Will Get in This Guide
+Create Dockerfile for Backend
+
+Build & Push Image to ACR
+
+Terraform: Provision Azure SQL Database
+
+Create SQL User and Schema (Manually or via init script)
+
+Create Kubernetes Secret for SQL Connection
+
+Deploy Backend on AKS
+
+Verify API + Access via Frontend
+
+
+
+
+
+
+
+Before creating docker image :
+
+
+updtae app.py connection string
+
+connetion string will be in database copy it and updtae user and pass and paste to app.py
+
+
+
+
+
+
+
+
+
+
+
+✅ Step 1: Create Dockerfile for Backend
+In the root of your cloned repo PyTodoBackendMonolith, create a file named Dockerfile:
+
+
+
+Here's an updated Dockerfile that solves the libodbc.so.2 issue by installing Microsoft ODBC Driver 18 for SQL Server on Debian-based images:
+
+
+
+
+FROM python:3.11-slim
+
+# Install ODBC and SQL Server driver dependencies
+RUN apt-get update && apt-get install -y \
+    curl gnupg2 unixodbc-dev gcc g++ libssl-dev libffi-dev \
+    && curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
+    && curl https://packages.microsoft.com/config/debian/11/prod.list > /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y msodbcsql18 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy app code
+COPY . .
+
+# Set environment variable (optional fallback)
+ENV PYTHONUNBUFFERED=1
+
+# Expose API port
+EXPOSE 8000
+
+# Run the app
+CMD ["python", "app.py"]
+
+
+
+
+
+
+
+
+✅ Step 2: Build and Push Docker Image to ACR
+
+First, retrieve your ACR login server from Terraform output or Azure CLI:
+
+
+az acr show --name <your-acr-name> --query loginServer --output tsv
+
+
+
+
+Then:
+
+# Login
+az acr login --name <your-acr-name>
+
+# Build and tag
+docker build -t <acr-login-server>/pytodo-backend:v1 .
+
+# Push
+docker push <acr-login-server>/pytodo-backend:v1
+
+
+
+
+✅ Step 3: Terraform for Azure SQL Database
+
+Add the following to your existing Terraform setup.
+
+✳️ Add to main.tf
+
+
+resource "azurerm_mssql_server" "sql_server" {
+  name                         = "pytododbsqlserver"
+  resource_group_name          = azurerm_resource_group.main.name
+  location                     = azurerm_resource_group.main.location
+  version                      = "12.0"
+  administrator_login          = "sqladminuser"
+  administrator_login_password = "YourP@ssword1234!"
+}
+
+resource "azurerm_mssql_database" "sql_db" {
+  name                = "pytododatabase"
+  server_id           = azurerm_mssql_server.sql_server.id
+  sku_name            = "Basic"
+  collation           = "SQL_Latin1_General_CP1_CI_AS"
+  max_size_gb         = 2
+}
+
+resource "azurerm_mssql_firewall_rule" "allow_all" {
+  name             = "AllowAll"
+  server_id        = azurerm_mssql_server.sql_server.id
+  start_ip_address = "0.0.0.0"
+  end_ip_address   = "255.255.255.255"
+}
+
+
+✅ Solution: Change the Region
+
+Update Region in terraform.tfvars or variables.tf
+Change your location from a restricted region (e.g., East US) to an allowed one like:
+location = "West Europe"   # or "Central US", "North Europe", "South Central US"
+
+✅ Alternatively, if you don’t want to destroy AKS, just deploy Azure SQL in a different resource group and region,
+ and connect using the fully qualified domain name (FQDN) — Azure SQL does not require it to be in the same region as AKS.
+
+
+
+
+
+
+✅ Step 4: Prepare SQL DB Schema (Optional Manual Step)
+
+
+To initialize the table structure:
+
+
+# Connect using Azure Data Studio or SQLCMD
+sqlcmd -S <sql-server-name>.database.windows.net -U sqladminuser -P 'YourP@ssword1234!' -d pytododatabase
+
+-- Inside SQL shell
+CREATE TABLE todos (
+    id INT PRIMARY KEY IDENTITY(1,1),
+    task NVARCHAR(255) NOT NULL
+);
+
+
+
+
+
+
+
+You're getting the error sqlcmd: command not found because the sqlcmd tool is not installed on your system. 
+This tool is required to connect to Azure SQL from the terminal for schema/table creation.
+
+✅ Step-by-Step: Install sqlcmd on Linux (Ubuntu/Debian)
+🔹 1. Install Microsoft SQL Server command-line tools
+
+Run the following:
+
+# Import the public repository GPG keys
+curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+
+# Register the Microsoft Ubuntu repository
+sudo add-apt-repository "$(curl https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list)"
+
+# Update package lists
+sudo apt-get update
+
+# Install SQLCMD
+sudo apt-get install -y mssql-tools unixodbc-dev
+
+
+
+
+
+🔹 2. Add sqlcmd to your PATH
+
+echo 'export PATH="$PATH:/opt/mssql-tools/bin"' >> ~/.bashrc
+source ~/.bashrc
+
+
+
+
+🔹 3. Test installation
+
+sqlcmd -?
+
+You should see the SQLCMD help menu.
+
+
+
+✅ Step 4 (Retry): Connect to Azure SQL DB
+
+
+
+
+
+
+✅ Step 5: Create Kubernetes Secret for DB Connection
+
+
+kubectl create secret generic backend-sql-secret \
+  --from-literal=SQL_SERVER='<sql-server-name>.database.windows.net' \
+  --from-literal=SQL_DB='pytododatabase' \
+  --from-literal=SQL_USER='sqladminuser' \
+  --from-literal=SQL_PASSWORD='YourP@ssword1234!'
+
+
+
+
+✅ Step 6: Create Kubernetes Deployment + Service
+
+backend-deployment.yaml
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pytodo-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pytodo-backend
+  template:
+    metadata:
+      labels:
+        app: pytodo-backend
+    spec:
+      containers:
+      - name: backend
+        image: <acr-login-server>/pytodo-backend:v1
+        ports:
+        - containerPort: 5000
+        env:
+        - name: SQL_SERVER
+          valueFrom:
+            secretKeyRef:
+              name: backend-sql-secret
+              key: SQL_SERVER
+        - name: SQL_DB
+          valueFrom:
+            secretKeyRef:
+              name: backend-sql-secret
+              key: SQL_DB
+        - name: SQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: backend-sql-secret
+              key: SQL_USER
+        - name: SQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: backend-sql-secret
+              key: SQL_PASSWORD
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pytodo-backend-svc
+spec:
+  selector:
+    app: pytodo-backend
+  ports:
+    - protocol: TCP
+      port: 5000
+      targetPort: 5000
+  type: LoadBalancer
+
+
+
+
+
+
+✅ Step 7: Deploy the Backend
+
+kubectl apply -f backend-deployment.yaml
+
+
+Wait for external IP:
+
+kubectl get svc pytodo-backend-svc
+
+
+
+
+Then test:
+
+curl http://<external-ip>:5000/tasks
+
+
+
+
+
+✅ Summary
+
+| Task                         | Status |
+| ---------------------------- | ------ |
+| Dockerfile for backend       | ✅      |
+| Build + Push to ACR          | ✅      |
+| Azure SQL DB with Terraform  | ✅      |
+| Secret injection in AKS      | ✅      |
+| Backend deployed and exposed | ✅      |
+
+

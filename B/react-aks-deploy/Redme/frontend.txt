@@ -1,0 +1,217 @@
+To deploy the ReactTodoUIMonolith frontend app on Azure Kubernetes Service (AKS) using Azure Container Registry (ACR), 
+here’s a full end-to-end guide.
+This includes infrastructure provisioning using Terraform, building and pushing the Docker image, deploying to AKS, and accessing the application.
+
+
+✅ High-Level Overview
+Terraform Provisioning:
+
+Resource Group
+
+Azure Container Registry (ACR)
+
+Azure Kubernetes Service (AKS)
+
+ACR role assignment to AKS
+
+Build and Push Docker Image to ACR
+
+Kubernetes Deployment (using kubectl)
+
+Expose App via LoadBalancer Service
+
+
+
+
+
+
+🧱 STEP 1: Terraform Infrastructure Setup
+📁 Create folder structure:
+
+mkdir react-aks-deploy && cd react-aks-deploy
+touch main.tf variables.tf outputs.tf terraform.tfvars
+
+
+
+🚀 Apply Terraform
+
+terraform init
+terraform apply -auto-approve
+
+Save the output of acr_login_server — you’ll need this to tag and push your image.
+
+
+
+
+
+
+
+
+🛠️ STEP 2: Build and Push Docker Image to ACR
+
+✅ Pre-requisites
+Install Docker
+
+Install Azure CLI
+
+Log in to Azure:
+az login
+
+
+🧱 Clone the app:
+git clone https://github.com/devopsinsiders/ReactTodoUIMonolith.git
+cd ReactTodoUIMonolith
+
+
+
+
+Dockerfile for the React App
+
+Create a Dockerfile inside your cloned repo (ReactTodoUIMonolith):
+
+# Stage 1: Build React app
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+# Stage 2: Serve with NGINX
+FROM nginx:alpine
+COPY --from=builder /app/build /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+
+
+
+
+
+
+🛠️ Build and Push Image:
+
+Login to ACR:
+az acr login --name <acr-name>
+
+
+Build and tag image:
+From inside your ReactTodoUIMonolith directory:
+
+docker build -t <acr-login-server>/reacttodo:v1 .
+docker push <acr-login-server>/reacttodo:v1
+
+
+
+
+
+
+🚢 STEP 3: Deploy React App to AKS
+
+✅ Get kubectl Configured
+
+az aks get-credentials --resource-group react-aks-rg --name react-aks
+
+
+
+
+
+
+
+
+📄 Create Kubernetes Deployment YAML
+
+react-deployment.yaml
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reacttodo-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reacttodo-ui
+  template:
+    metadata:
+      labels:
+        app: reacttodo-ui
+    spec:
+      containers:
+        - name: reacttodo-ui
+          image: $ACR_LOGIN_SERVER/reacttodo-ui:latest
+          ports:
+            - containerPort: 80
+
+
+
+
+
+
+
+
+📄 Create Service YAML
+
+react-service.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: reacttodo-ui-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: reacttodo-ui
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+
+
+
+
+
+🧨 Apply YAMLs
+
+kubectl apply -f react-deployment.yaml
+kubectl apply -f react-service.yaml
+
+
+
+
+
+🌐 STEP 4: Access the Application
+
+Wait a few minutes and run:
+
+kubectl get service reacttodo-ui-service
+
+
+
+
+Look for the EXTERNAL-IP column. Access the app in the browser using:
+
+http://<EXTERNAL-IP>
+
+
+
+✅ Summary
+
+
+| Step | Description                                          |
+| ---- | ---------------------------------------------------- |
+| 1️⃣  | Provision ACR and AKS using Terraform 
+        Built Dockerfile manually               |
+| 2️⃣  | Build & push Docker image to ACR                     |
+| 3️⃣  | Deploy React app via YAML manifests                  |
+| 4️⃣  | Expose via LoadBalancer and access using EXTERNAL-IP |
+
+
+
+
+
+
+
+
+
+
+reactacr123456.azurecr.io
